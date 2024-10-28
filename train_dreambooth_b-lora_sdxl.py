@@ -1076,9 +1076,13 @@ def main(args):
         vae_path,
         subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
         revision=args.revision,
+        use_safetensors=True
     )
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        args.pretrained_model_name_or_path, 
+        subfolder="unet", 
+        revision=args.revision,
+        use_safetensors=True,
     )
 
     # We only train the additional adapter LoRA layers
@@ -1141,34 +1145,29 @@ def main(args):
             attn_module = getattr(attn_module, n)
 
         # Set the `lora_layer` attribute of the attention-related matrices.
-        attn_module.to_q.set_lora_layer(
-            LoRALinearLayer(
+        attn_module.to_q.lora_layer=LoRALinearLayer(
                 in_features=attn_module.to_q.in_features,
                 out_features=attn_module.to_q.out_features,
                 rank=args.rank,
             )
-        )
-        attn_module.to_k.set_lora_layer(
-            LoRALinearLayer(
+        
+        attn_module.to_k.lora_layer=LoRALinearLayer(
                 in_features=attn_module.to_k.in_features,
                 out_features=attn_module.to_k.out_features,
                 rank=args.rank,
             )
-        )
-        attn_module.to_v.set_lora_layer(
-            LoRALinearLayer(
+        
+        attn_module.to_v.lora_layer=LoRALinearLayer(
                 in_features=attn_module.to_v.in_features,
                 out_features=attn_module.to_v.out_features,
                 rank=args.rank,
             )
-        )
-        attn_module.to_out[0].set_lora_layer(
-            LoRALinearLayer(
+        
+        attn_module.to_out[0].lora_layer=LoRALinearLayer(
                 in_features=attn_module.to_out[0].in_features,
                 out_features=attn_module.to_out[0].out_features,
                 rank=args.rank,
             )
-        )
 
         # Accumulate the LoRA params to optimize.
         unet_lora_parameters.extend(attn_module.to_q.lora_layer.parameters())
