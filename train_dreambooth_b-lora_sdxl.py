@@ -139,6 +139,7 @@ def text_encoder_lora_state_dict(text_encoder):
 
 def save_model_card(
         repo_id: str,
+        use_dora: bool,
         images=None,
         base_model=str,
         train_text_encoder=False,
@@ -147,34 +148,16 @@ def save_model_card(
         repo_folder=None,
         vae_path=None,
 ):
-    img_str = "widget:\n" if images else ""
-    for i, image in enumerate(images):
-        image.save(os.path.join(repo_folder, f"image_{i}.png"))
-        img_str += f"""
-        - text: '{validation_prompt if validation_prompt else ' '}'
-          output:
-            url:
-                "image_{i}.png"
-        """
+    widget_dict = []
+    if images is not None:
+        for i, image in enumerate(images):
+            image.save(os.path.join(repo_folder, f"image_{i}.png"))
+            widget_dict.append(
+                {"text": validation_prompt if validation_prompt else " ", "output": {"url": f"image_{i}.png"}}
+            )
 
-    yaml = f"""
----
-tags:
-- stable-diffusion-xl
-- stable-diffusion-xl-diffusers
-- text-to-image
-- diffusers
-- lora
-- template:sd-lora
-{img_str}
-base_model: {base_model}
-instance_prompt: {instance_prompt}
-license: openrail++
----
-    """
-
-    model_card = f"""
-# SDXL LoRA DreamBooth - {repo_id}
+    model_description = f"""
+# {'SDXL' if 'playground' not in base_model else 'Playground'} LoRA DreamBooth - {repo_id}
 
 <Gallery />
 
@@ -199,8 +182,36 @@ Weights for this model are available in Safetensors format.
 [Download]({repo_id}/tree/main) them in the Files & versions tab.
 
 """
-    with open(os.path.join(repo_folder, "README.md"), "w") as f:
-        f.write(yaml + model_card)
+    if "playground" in base_model:
+        model_description += """\n
+## License
+
+Please adhere to the licensing terms as described [here](https://huggingface.co/playgroundai/playground-v2.5-1024px-aesthetic/blob/main/LICENSE.md).
+"""
+    model_card = load_or_create_model_card(
+        repo_id_or_path=repo_id,
+        from_training=True,
+        license="openrail++" if "playground" not in base_model else "playground-v2dot5-community",
+        base_model=base_model,
+        prompt=instance_prompt,
+        model_description=model_description,
+        widget=widget_dict,
+    )
+    tags = [
+        "text-to-image",
+        "text-to-image",
+        "diffusers-training",
+        "diffusers",
+        "lora" if not use_dora else "dora",
+        "template:sd-lora",
+    ]
+    if "playground" in base_model:
+        tags.extend(["playground", "playground-diffusers"])
+    else:
+        tags.extend(["stable-diffusion-xl", "stable-diffusion-xl-diffusers"])
+
+    model_card = populate_model_card(model_card, tags=tags)
+    model_card.save(os.path.join(repo_folder, "README.md"))
 
 
 def log_validation(
@@ -320,9 +331,9 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help=(
-            "The name of the Dataset (from the HuggingFace hub) containing the training data of instance images (could be your own, possibly private,"
-            " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
-            " or to a folder containing files that 🤗 Datasets can understand."
+            "The name of the Dataset (from the HuggingFace hub) containing the training data of instance images "
+            "(could be your own, possibly private, dataset). It can also be a path pointing to a local copy of a "
+            "dataset in your filesystem, or to a folder containing files that 🤗 Datasets can understand."
         ),
     )
     parser.add_argument(
@@ -335,7 +346,7 @@ def parse_args(input_args=None):
         "--instance_data_dir",
         type=str,
         default=None,
-        help=("A folder containing the training data. "),
+        help="A folder containing the training data.",
     )
 
     parser.add_argument(
@@ -349,9 +360,7 @@ def parse_args(input_args=None):
         "--image_column",
         type=str,
         default="image",
-        help="The column of the dataset containing the target image. By "
-             "default, the standard Image Dataset maps out 'file_name' "
-             "to 'image'.",
+        help="The column of the dataset containing the target image. By default, the standard Image Dataset maps out 'file_name' to 'image'.",
     )
     parser.add_argument(
         "--caption_column",
@@ -465,12 +474,12 @@ def parse_args(input_args=None):
         type=int,
         default=0,
         help=(
-            "Coordinate for (the height) to be included in the crop coordinate embeddings needed by SDXL UNet."
+            "Coordinate for (the width) to be included in the crop coordinate embeddings needed by SDXL UNet."
         ),
     )
     parser.add_argument(
         "--center_crop",
-        default=True,
+        default=False,
         action="store_true",
         help=(
             "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
@@ -515,7 +524,7 @@ def parse_args(input_args=None):
         "--checkpoints_total_limit",
         type=int,
         default=None,
-        help=("Max number of checkpoints to store."),
+        help="Max number of checkpoints to store.",
     )
     parser.add_argument(
         "--resume_from_checkpoint",
@@ -595,16 +604,14 @@ def parse_args(input_args=None):
         "--dataloader_num_workers",
         type=int,
         default=0,
-        help=(
-            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
-        ),
+        help="Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process.",
     )
 
     parser.add_argument(
         "--optimizer",
         type=str,
         default="AdamW",
-        help=('The optimizer type to use. Choose between ["AdamW", "prodigy"]'),
+        help="The optimizer type to use. Choose between ['AdamW', 'prodigy']",
     )
 
     parser.add_argument(
@@ -628,8 +635,8 @@ def parse_args(input_args=None):
         "--prodigy_beta3",
         type=float,
         default=None,
-        help="coefficients for computing the Prodidy stepsize using running averages. If set to None, "
-             "uses the value of square root of beta2. Ignored if optimizer is adamW",
+        help="Coefficients for computing the Prodigy stepsize using running averages. If set to None, "
+             "uses the value of square root of beta2. Ignored if optimizer is AdamW.",
     )
     parser.add_argument(
         "--prodigy_decouple",
@@ -661,14 +668,14 @@ def parse_args(input_args=None):
         "--prodigy_use_bias_correction",
         type=bool,
         default=True,
-        help="Turn on Adam's bias correction. True by default. Ignored if optimizer is adamW",
+        help="Turn on Adam's bias correction. True by default. Ignored if optimizer is AdamW.",
     )
     parser.add_argument(
         "--prodigy_safeguard_warmup",
         type=bool,
         default=True,
         help="Remove lr from the denominator of D estimate to avoid issues during warm-up stage. True by default. "
-             "Ignored if optimizer is adamW",
+             "Ignored if optimizer is AdamW.",
     )
     parser.add_argument(
         "--max_grad_norm", default=1.0, type=float, help="Max gradient norm."
@@ -702,40 +709,28 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--allow_tf32",
         action="store_true",
-        help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
+        help="Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
+             " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices.",
     )
     parser.add_argument(
         "--report_to",
         type=str,
         default="tensorboard",
-        help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
-            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
-        ),
+        help="The integration to report the results and logs to. Supported platforms are 'tensorboard', 'wandb' and 'comet_ml'. Use 'all' to report to all integrations.",
     )
     parser.add_argument(
         "--mixed_precision",
         type=str,
         default=None,
         choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
-        ),
+        help="Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >= 1.10 and an Nvidia Ampere GPU.",
     )
     parser.add_argument(
         "--prior_generation_precision",
         type=str,
         default=None,
         choices=["no", "fp32", "fp16", "bf16"],
-        help=(
-            "Choose prior generation precision between fp32, fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to  fp16 if a GPU is available else fp32."
-        ),
+        help="Choose prior generation precision between fp32, fp16 and bf16 (bfloat16).",
     )
     parser.add_argument(
         "--local_rank",
@@ -752,7 +747,18 @@ def parse_args(input_args=None):
         "--rank",
         type=int,
         default=4,
-        help=("The dimension of the LoRA update matrices."),
+        help="The dimension of the LoRA update matrices.",
+    )
+    parser.add_argument(
+        "--use_dora",
+        action="store_true",
+        default=False,
+        help="Whether to train a DoRA. Note: requires peft installation from source.",
+    )
+    parser.add_argument(
+        "--do_edm_style_training",
+        action="store_true",
+        help="Flag to conduct training using the EDM formulation as per a specific research paper.",
     )
 
     if input_args is not None:
@@ -760,13 +766,12 @@ def parse_args(input_args=None):
     else:
         args = parser.parse_args()
 
+    # Validation checks
     if args.dataset_name is None and args.instance_data_dir is None:
         raise ValueError("Specify either `--dataset_name` or `--instance_data_dir`")
 
     if args.dataset_name is not None and args.instance_data_dir is not None:
-        raise ValueError(
-            "Specify only one of `--dataset_name` or `--instance_data_dir`"
-        )
+        raise ValueError("Specify only one of `--dataset_name` or `--instance_data_dir`")
 
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -778,25 +783,18 @@ def parse_args(input_args=None):
         if args.class_prompt is None:
             raise ValueError("You must specify prompt for class images.")
     else:
-        # logger is not available yet
         if args.class_data_dir is not None:
-            warnings.warning(
-                "You need not use --class_data_dir without --with_prior_preservation."
-            )
+            warnings.warn("You need not use --class_data_dir without --with_prior_preservation.")
         if args.class_prompt is not None:
-            warnings.warning(
-                "You need not use --class_prompt without --with_prior_preservation."
-            )
+            warnings.warn("You need not use --class_prompt without --with_prior_preservation.")
 
     return args
-
 
 class DreamBoothDataset(Dataset):
     """
     A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
     It pre-processes the images.
     """
-
     def __init__(
             self,
             instance_data_root,
@@ -1051,6 +1049,9 @@ def main(args):
         project_config=accelerator_project_config,
         kwargs_handlers=[kwargs],
     )
+    
+    if args.do_edm_style_training and args.snr_gamma is not None:
+        raise ValueError("Min-SNR formulation is not supported when conducting EDM-style training.")
 
     # Disable AMP for MPS.
     if torch.backends.mps.is_available():
@@ -1176,7 +1177,19 @@ def main(args):
     )
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    scheduler_type = determine_scheduler_type(args.pretrained_model_name_or_path, args.revision)
+    if "EDM" in scheduler_type:
+        args.do_edm_style_training = True
+        noise_scheduler = EDMEulerScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+        logger.info("Performing EDM-style training!")
+    elif args.do_edm_style_training:
+        noise_scheduler = EulerDiscreteScheduler.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="scheduler"
+        )
+        logger.info("Performing EDM-style training!")
+    else:
+        noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="text_encoder",
@@ -1187,6 +1200,7 @@ def main(args):
         subfolder="text_encoder_2",
         revision=args.revision,
     )
+
     vae_path = (
         args.pretrained_model_name_or_path
         if args.pretrained_vae_model_name_or_path is None
@@ -1198,11 +1212,13 @@ def main(args):
         revision=args.revision,
         use_safetensors=True
     )
+
     latents_mean = latents_std = None
     if hasattr(vae.config, "latents_mean") and vae.config.latents_mean is not None:
         latents_mean = torch.tensor(vae.config.latents_mean).view(1, 4, 1, 1)
     if hasattr(vae.config, "latents_std") and vae.config.latents_std is not None:
         latents_std = torch.tensor(vae.config.latents_std).view(1, 4, 1, 1)
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, 
         subfolder="unet", 
@@ -1259,6 +1275,7 @@ def main(args):
     # now we will add new LoRA weights to the attention layers
     unet_lora_config = LoraConfig(
         r=args.rank,
+        use_dora=args.use_dora,
         lora_alpha=args.rank,
         init_lora_weights="gaussian",
         target_modules=["to_k", "to_q", "to_v", "to_out.0"]
@@ -1761,19 +1778,30 @@ def main(args):
                 noise = torch.randn_like(model_input)
                 bsz = model_input.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(
-                    0,
-                    noise_scheduler.config.num_train_timesteps,
-                    (bsz,),
-                    device=model_input.device,
-                )
-                timesteps = timesteps.long()
+                if not args.do_edm_style_training:
+                    timesteps = torch.randint(
+                        0, noise_scheduler.config.num_train_timesteps, (bsz,), device=model_input.device
+                    )
+                    timesteps = timesteps.long()
+                else:
+                    # in EDM formulation, the model is conditioned on the pre-conditioned noise levels
+                    # instead of discrete timesteps, so here we sample indices to get the noise levels
+                    # from `scheduler.timesteps`
+                    indices = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,))
+                    timesteps = noise_scheduler.timesteps[indices].to(device=model_input.device)
 
                 # Add noise to the model input according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
-                noisy_model_input = noise_scheduler.add_noise(
-                    model_input, noise, timesteps
-                )
+                noisy_model_input = noise_scheduler.add_noise(model_input, noise, timesteps)
+                # For EDM-style training, we first obtain the sigmas based on the continuous timesteps.
+                # We then precondition the final model inputs based on these sigmas instead of the timesteps.
+                # Follow: Section 5 of https://arxiv.org/abs/2206.00364.
+                if args.do_edm_style_training:
+                    sigmas = get_sigmas(timesteps, len(noisy_model_input.shape), noisy_model_input.dtype)
+                    if "EDM" in scheduler_type:
+                        inp_noisy_latents = noise_scheduler.precondition_inputs(noisy_model_input, sigmas)
+                    else:
+                        inp_noisy_latents = noisy_model_input / ((sigmas**2 + 1) ** 0.5)
 
                 # Calculate the elements to repeat depending on the use of prior-preservation and custom captions.
                 if not train_dataset.custom_instance_prompts:
@@ -1793,15 +1821,13 @@ def main(args):
                 if not args.train_text_encoder:
                     unet_added_conditions = {
                         "time_ids": add_time_ids.repeat(elems_to_repeat_time_ids, 1),
-                        "text_embeds": unet_add_text_embeds.repeat(
-                            elems_to_repeat_text_embeds, 1
-                        ),
+                        "text_embeds": unet_add_text_embeds.repeat(elems_to_repeat_text_embeds, 1),
                     }
                     prompt_embeds_input = prompt_embeds.repeat(
                         elems_to_repeat_text_embeds, 1, 1
                     )
                     model_pred = unet(
-                        noisy_model_input,
+                        inp_noisy_latents if args.do_edm_style_training else noisy_model_input,
                         timesteps,
                         prompt_embeds_input,
                         added_cond_kwargs=unet_added_conditions,
@@ -1827,17 +1853,42 @@ def main(args):
                         elems_to_repeat_text_embeds, 1, 1
                     )
                     model_pred = unet(
-                        noisy_model_input,
+                        inp_noisy_latents if args.do_edm_style_training else noisy_model_input,
                         timesteps,
                         prompt_embeds_input,
                         added_cond_kwargs=unet_added_conditions,
                     ).sample
 
+                weighting = None
+                if args.do_edm_style_training:
+                    # Similar to the input preconditioning, the model predictions are also preconditioned
+                    # on noised model inputs (before preconditioning) and the sigmas.
+                    # Follow: Section 5 of https://arxiv.org/abs/2206.00364.
+                    if "EDM" in scheduler_type:
+                        model_pred = noise_scheduler.precondition_outputs(noisy_model_input, model_pred, sigmas)
+                    else:
+                        if noise_scheduler.config.prediction_type == "epsilon":
+                            model_pred = model_pred * (-sigmas) + noisy_model_input
+                        elif noise_scheduler.config.prediction_type == "v_prediction":
+                            model_pred = model_pred * (-sigmas / (sigmas**2 + 1) ** 0.5) + (
+                                noisy_model_input / (sigmas**2 + 1)
+                            )
+                    # We are not doing weighting here because it tends result in numerical problems.
+                    # See: https://github.com/huggingface/diffusers/pull/7126#issuecomment-1968523051
+                    # There might be other alternatives for weighting as well:
+                    # https://github.com/huggingface/diffusers/pull/7126#discussion_r1505404686
+                    if "EDM" not in scheduler_type:
+                        weighting = (sigmas**-2.0).float()
+
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
+                    target = model_input if args.do_edm_style_training else noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(model_input, noise, timesteps)
+                    target = (
+                        model_input
+                        if args.do_edm_style_training
+                        else noise_scheduler.get_velocity(model_input, noise, timesteps)
+                    )   
                 else:
                     raise ValueError(
                         f"Unknown prediction type {noise_scheduler.config.prediction_type}"
@@ -1849,14 +1900,28 @@ def main(args):
                     target, target_prior = torch.chunk(target, 2, dim=0)
 
                     # Compute prior loss
-                    prior_loss = F.mse_loss(
-                        model_pred_prior.float(), target_prior.float(), reduction="mean"
-                    )
+                    if weighting is not None:
+                        prior_loss = torch.mean(
+                            (weighting.float() * (model_pred_prior.float() - target_prior.float()) ** 2).reshape(
+                                target_prior.shape[0], -1
+                            ),
+                            1,
+                        )
+                        prior_loss = prior_loss.mean()
+                    else:
+                        prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
 
                 if args.snr_gamma is None:
-                    loss = F.mse_loss(
-                        model_pred.float(), target.float(), reduction="mean"
-                    )
+                    if weighting is not None:
+                        loss = torch.mean(
+                            (weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(
+                                target.shape[0], -1
+                            ),
+                            1,
+                        )
+                        loss = loss.mean()
+                    else:
+                        loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
@@ -1890,7 +1955,6 @@ def main(args):
                     loss = loss + args.prior_loss_weight * prior_loss
                 
                 accelerator.backward(loss)
-
                 if accelerator.sync_gradients:
                     params_to_clip = (
                         itertools.chain(unet_lora_parameters, text_lora_parameters_one, text_lora_parameters_two)
@@ -1939,9 +2003,7 @@ def main(args):
                                     )
                                     shutil.rmtree(removing_checkpoint)
 
-                        save_path = os.path.join(
-                            args.output_dir, f"checkpoint-{global_step}"
-                        )
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
