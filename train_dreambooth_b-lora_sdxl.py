@@ -1288,8 +1288,6 @@ def main(args):
         if "lora" in name and is_belong_to_groups(name, BLORA_BLOCKS):
             unet_lora_parameters.append(param)
 
-    print(f"unet_lora_parameters: {len(unet_lora_parameters)}")
-
     # The text encoder comes from 🤗 transformers, so we cannot directly modify it.
     # So, instead, we monkey-patch the forward calls of its attention-blocks.
     if args.train_text_encoder:
